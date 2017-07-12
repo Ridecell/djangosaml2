@@ -32,7 +32,7 @@ from django.http import  HttpResponseBadRequest, HttpResponseForbidden  # 40x
 from django.http import HttpResponseServerError  # 50x
 from django.views.decorators.http import require_POST
 from django.shortcuts import render
-from django.template import TemplateDoesNotExist
+from django.template import loader, TemplateDoesNotExist
 from django.utils.http import is_safe_url
 from django.utils.six import text_type, binary_type
 try:
@@ -93,6 +93,16 @@ def login(request,
     will be rendered.
     """
     logger.debug('Login process started')
+
+    # Ensure that post_binding_form_template really exists.
+    if post_binding_form_template:
+        post_binding_form_template_exists = True
+        try:
+            loader.get_template(post_binding_form_template)
+        except TemplateDoesNotExist:
+            post_binding_form_template_exists = False
+    else:
+        post_binding_form_template_exists = False
 
     came_from = request.GET.get('next', settings.LOGIN_REDIRECT_URL)
     if not came_from:
@@ -180,8 +190,8 @@ def login(request,
         else:
             http_response = HttpResponseRedirect(get_location(result))
     elif binding == BINDING_HTTP_POST:
-        # use the html provided by pysaml2 if no template specified
-        if not post_binding_form_template:
+        # use the html provided by pysaml2 if no template specified or it doesn't exist
+        if not post_binding_form_template or not post_binding_form_template_exists:
             try:
                 session_id, result = client.prepare_for_authenticate(
                     entityid=selected_idp, relay_state=came_from,
@@ -204,7 +214,7 @@ def login(request,
             http_response = render(request, post_binding_form_template, {
                 'target_url': location,
                 'params': {
-                    'SAMLRequest': base64.b64encode(request_xml),
+                    'SAMLRequest': base64.b64encode(binary_type(request_xml)),
                     'RelayState': came_from,
                     },
                 })
@@ -276,7 +286,8 @@ def assertion_consumer_service(request,
         create_unknown_user = create_unknown_user()
 
     logger.debug('Trying to authenticate the user')
-    user = auth.authenticate(session_info=session_info,
+    user = auth.authenticate(request=request,
+                             session_info=session_info,
                              attribute_mapping=attribute_mapping,
                              create_unknown_user=create_unknown_user)
     if user is None:
